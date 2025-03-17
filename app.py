@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import io
-from datetime import datetime
 
 # Set up the app title
 st.title("Price Inconsistency Checker")
@@ -28,14 +27,13 @@ if file is not None:
     
     # Convert approval columns to boolean
     approval_columns = ["BASE_APPROVED", "COLOR_APPROVED", "SKU_APPROVED", "ECOM_ENABLED"]
-    for col in approval_columns:
-        df[col] = df[col].astype(str).str.strip().str.lower().replace({"true": True, "false": False})
+    df[approval_columns] = df[approval_columns].applymap(lambda x: str(x).strip().lower() == "true")
+    
+    # Convert CONSUMERPRICE to numeric, treating empty values as NaN
+    df["CONSUMERPRICE"] = pd.to_numeric(df["CONSUMERPRICE"], errors='coerce')
     
     # Filter COLOR_IDs where at least one SKU meets approval criteria
-    approved_colors = df.groupby("COLOR_ID").filter(
-        lambda x: ((x["BASE_APPROVED"] == "True") & (x["COLOR_APPROVED"] == "True") & 
-                   (x["SKU_APPROVED"] == "True") & (x["ECOM_ENABLED"] == "True")).any()
-    )
+    approved_colors = df[df[approval_columns].all(axis=1)]
     
     # Identify inconsistencies: different prices within the same COLOR_ID or missing prices
     inconsistent_prices = approved_colors.groupby("COLOR_ID").filter(
@@ -44,7 +42,13 @@ if file is not None:
     
     # Prepare output
     if not inconsistent_prices.empty:
-        output_df = inconsistent_prices[["PID", "CONSUMERPRICE"]].copy()
+        inconsistent_prices["Issue"] = inconsistent_prices.groupby("COLOR_ID")["CONSUMERPRICE"].transform(
+            lambda group: "No Price and Different Price" if group.isna().any() and group.nunique() > 1
+            else "No Price" if group.isna().any()
+            else "Different Price"
+        )
+        
+        output_df = inconsistent_prices[["PID", "COLOR_ID", "CONSUMERPRICE", "Issue"]].copy()
         output_df.insert(0, "PRICE_LIST", price_list_prefix)
         output_df["CURRENCY_CODE"] = ""
         output_df["SCALE"] = ""
@@ -64,6 +68,9 @@ if file is not None:
             file_name=f"{price_list_prefix}_Price_Inconsistencies.txt",
             mime="text/plain"
         )
+        
+        # Display summary table
+        st.dataframe(output_df[["PID", "COLOR_ID", "CONSUMERPRICE", "Issue"]])
         
         st.success("✅ Price inconsistency report generated successfully!")
     else:
